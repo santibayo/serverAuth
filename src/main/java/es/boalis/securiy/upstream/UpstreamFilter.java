@@ -4,68 +4,77 @@ import javax.servlet.*;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.net.HttpURLConnection;
-import java.net.URL;
 import java.util.*;
 
 public class UpstreamFilter implements Filter {
     private  String endPoint;
     private  String genericError;
+    private String headerName;
+    private  UpstreamDao dao;
+
+    /**
+     * Parametros de configuracion:
+     * url-endpoint - url del servicio de validacion
+     * header-credential - cabecera con la credencial
+     * default-error-url - la url por defecto cuando no se retorne un mensaje especifico
+     * @param filterConfig
+     * @throws ServletException
+     */
     public void init(FilterConfig filterConfig) throws ServletException {
         this.endPoint = filterConfig.getInitParameter("url-endpoint");
-        this.genericError =  filterConfig.getInitParameter("gen-error");
+        this.headerName = filterConfig.getInitParameter("header-credential");
+        this.genericError = filterConfig.getInitParameter("default-error-url");
+        dao = new UpstreamDao(this.endPoint);
     }
 
+    /**
+     * ejecuta la validacion con el dao.
+     * @param servletRequest
+     * @param servletResponse
+     * @param filterChain
+     * @throws IOException
+     * @throws ServletException
+     */
     public void doFilter(ServletRequest servletRequest, ServletResponse servletResponse, FilterChain filterChain) throws IOException, ServletException {
         HttpServletRequest request = (HttpServletRequest)servletRequest;
         Enumeration<String> headerNames = request.getHeaderNames();
-        URL url = new URL(this.endPoint);
-        HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
-        // Expirar a los 10 segundos si la conexión no se establece
-        urlConnection.setConnectTimeout(10000);
-        // Esperar solo 15 segundos para que finalice la lectura
-        urlConnection.setReadTimeout(15000);
-        while(headerNames.hasMoreElements()){
-            String headerName = headerNames.nextElement();
-            String value = request.getHeader(headerName);
-            urlConnection.setRequestProperty(headerName,value);
+        String credential = request.getHeader(headerName);
+        if (credential==null){
+            credential="_NULL_";
         }
-        urlConnection.setRequestProperty("Req-Uri",request.getRequestURI());
-        urlConnection.setRequestProperty("Req-Host",request.getLocalName());
-        urlConnection.setRequestProperty("Req-Method",request.getMethod());
+        RequestHttpCli requestCli = RequestHttpCli.builder(request.getProtocol(),request.getLocalName(),request.getLocalPort(),request.getRequestURI()).
+                withCredential(credential).
+                withMethod(request.getMethod());
 
-        int status = urlConnection.getResponseCode();
+        // limpiar las peticiones para evitar XSS o Inyecciones
+        requestCli = this.clean(requestCli);
+
+        ResponseHttpCli response = dao.connect(requestCli);
+        int status = response.getResponseCode();
         if (status == 200){
-            String userId = urlConnection.getHeaderField("Auth-User");
-            String roleRequested = urlConnection.getHeaderField("Role-User");
-            Map<String, List<String>> headersResponse = urlConnection.getHeaderFields();
-            Iterator it = headersResponse.keySet().iterator();
-            Map<String,String> responseDataHeaders = new HashMap<String, String>();
-            while (it.hasNext()){
-                String key = (String) it.next();
-                if (key.toLowerCase().startsWith("sec-")){
-                    responseDataHeaders.put(key,urlConnection.getHeaderField(key));
-                }
-            }
-            urlConnection.disconnect();
+
             // Crear un requestWrapper y ponerlo.
             HeadersWrapper newRequest = new HeadersWrapper(request);
-            newRequest.setSecurityData(responseDataHeaders);
-            newRequest.setUsername(userId);
-            newRequest.setRole(roleRequested);
+            newRequest.setSecurityData(response.getSecurityAuxInfo());
+            newRequest.setUsername(response.getUsername());
+            newRequest.setRole(response.getRole());
             filterChain.doFilter(newRequest,servletResponse);
             return;
 
         }else{
-                String urlRedirect = urlConnection.getHeaderField("Redir-Url");
-                if (urlRedirect==null){
-                    urlRedirect= this.genericError;
-                }
-                HttpServletResponse httpSerlvetResponse = (HttpServletResponse) servletResponse;
-                httpSerlvetResponse.sendRedirect(urlRedirect);
-                httpSerlvetResponse.setHeader("Status-Code",Integer.toString(status));
-                urlConnection.disconnect();
+            String urlRedirect = response.getUrlError();
+            if (urlRedirect==null){
+                urlRedirect= this.genericError;
+            }
+            HttpServletResponse httpSerlvetResponse = (HttpServletResponse) servletResponse;
+            httpSerlvetResponse.setStatus(302);
+            httpSerlvetResponse.sendRedirect(urlRedirect);
+            return;
         }
+    }
+
+    private RequestHttpCli clean(RequestHttpCli rq){
+        return rq;
     }
 
     public void destroy() {
