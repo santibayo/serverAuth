@@ -4,6 +4,7 @@ import javax.servlet.*;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.security.Principal;
 import java.util.*;
 
 public class UpstreamFilter implements Filter {
@@ -35,7 +36,7 @@ public class UpstreamFilter implements Filter {
      * @throws IOException
      * @throws ServletException
      */
-    public void doFilter(ServletRequest servletRequest, ServletResponse servletResponse, FilterChain filterChain) throws IOException, ServletException {
+    public final void doFilter(ServletRequest servletRequest, ServletResponse servletResponse, FilterChain filterChain) throws IOException, ServletException {
         HttpServletRequest request = (HttpServletRequest)servletRequest;
         Enumeration<String> headerNames = request.getHeaderNames();
         String credential = request.getHeader(headerName);
